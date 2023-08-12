@@ -340,3 +340,255 @@ def ss_get_dops_multi(grid, sats, el_mask):
     for i in range(np.size(grid, 0)):
         dops[i,0:5] = ss_get_dops_single(grid[i,:], sats, el_mask)
     return dops
+
+def ss_get_all_dops(n_p, n_s, inc, grid_n, elmask, alt):
+    ssdeg2rad_local = np.pi / 180  # defining a local variable for degree to radians
+    sats = [[2022, 11, 1, 0, 3, 24, alt + 6378.137, 0.0, inc, 0.0, 0.0, 0.0]]
+    raan0 = sats[0][9]
+    ta0 = sats[0][11]
+    for i in range(n_p):
+        for j in range(n_s):
+            raan = raan0 + i * 360 / n_p
+            ta = ta0 + j * 360 / n_s + i * 360 * 1 / (n_s * n_p)
+            ta = ta % 360
+            if ta >= 180:
+                ta -= 360
+            if i == 0 and j == 0:
+                sats = [[2022, 11, 1, 0, 3, 24, alt + 6378.137, 0.0, inc, 0.0, 0.0, 0.0]]
+            else:
+                sats.append([sats[0][0], sats[0][1], sats[0][2], sats[0][3], sats[0][4], sats[0][5], \
+                        sats[0][6], sats[0][7], sats[0][8], raan, sats[0][10], ta])
+    eci = [[0.0]]
+    ecef = [[0.0]]
+    for i in range(n_p*n_s):
+        a = sats[i][6]
+        e = sats[i][7]
+        incl = sats[i][8] * ssdeg2rad_local  # inclination
+        raan = sats[i][9] * ssdeg2rad_local  # Right ascension of the ascending node
+        aop = sats[i][10] * ssdeg2rad_local  # argument of pregee
+        ta = sats[i][11] * ssdeg2rad_local  # true anomaly
+        r = (a * (1 - e ** 2)) / (1 + e * np.cos(ta))  # Get position from orbit formula
+        h = np.sqrt(mu * a * (1 - e ** 2))  # Magnitude of specific angular momentum
+        x = r * (np.cos(raan) * np.cos(aop + ta) - np.sin(raan) * np.sin(aop + ta) * np.cos(incl))  # Position X-component
+        y = r * (np.sin(raan) * np.cos(aop + ta) + np.cos(raan) * np.sin(aop + ta) * np.cos(incl))  # Position Y-component
+        z = r * (np.sin(incl) * np.sin(aop + ta))  # Position Z-component
+        p = a * (1 - e ** 2)  # Semilatus Rectum
+        x_dot = ((x * h * e) / (r * p)) * np.sin(ta) - ((h / r) * (
+                    np.cos(raan) * np.sin(aop + ta) + np.sin(raan) * np.cos(aop + ta) * np.cos(incl)))  # Velocity X-component
+        y_dot = ((y * h * e) / (r * p)) * np.sin(ta) - ((h / r) * (
+                    np.sin(raan) * np.sin(aop + ta) - np.cos(raan) * np.cos(aop + ta) * np.cos(incl)))  # Velocity Y-component
+        z_dot = ((z * h * e) / (r * p)) * np.sin(ta) + ((h / r) * (np.sin(incl) * np.cos(aop + ta)))  # Velocity Z-component
+        if i == 0:
+            eci = [[sats[i][0], sats[i][1], sats[i][2], sats[i][3], sats[i][4], sats[i][5],\
+                    x, y, z, x_dot, y_dot, z_dot]]
+        else:
+            eci.append([sats[i][0], sats[i][1], sats[i][2], sats[i][3], sats[i][4], sats[i][5],\
+                    x, y, z, x_dot, y_dot, z_dot])
+        
+        year = sats[i][0]
+        mes = sats[i][1]
+        dia = sats[i][2]
+        hora = sats[i][3]
+        minuto = sats[i][4]
+        segundo = sats[i][5]
+        # get modified julian day (mjd)
+        mjd = 367 * year + dia - 712269 + np.trunc(275 * mes / 9) - np.trunc(7 * (year + np.trunc((mes + 9) / 12)) / 4)
+        # get fraction of the day (dfra)
+        dfra = segundo + 60 * (minuto + 60 * hora)
+        # get Greenwich Sidereal Time (GWST)
+        tsj = (mjd - 18262.5) / 36525
+        tsgo = (24110.54841 + (8640184.812866 + 9.3104e-2 * tsj - 6.2e-6 * tsj * tsj) * tsj) * np.pi / 43200
+        tetp = 7.292116e-5;  # Earth angular velocity (rad/s)
+        gwst = np.mod(tsgo + dfra * tetp, 2 * np.pi)
+        # get DCM from ECI to ECEF
+        coan = np.cos(gwst)
+        sian = np.sin(gwst)
+        # DCM_eci2ecef = np.array([[coan, sian, 0], [-sian, coan, 0], [0, 0, 1]])
+        x_ecef = coan * x + sian * y
+        y_ecef = -sian * x + coan * y
+        z_ecef = z
+        x_dot_ecef = coan * x_dot + sian * y_dot
+        y_dot_ecef = -sian * x_dot + coan * y_dot
+        z_dot_ecef = z_dot
+        if i == 0:
+            ecef = [[sats[i][0], sats[i][1], sats[i][2], sats[i][3], sats[i][4], sats[i][5],\
+                    x_ecef, y_ecef, z_ecef, x_dot_ecef, y_dot_ecef, z_dot_ecef]]
+        else:
+            ecef.append([sats[i][0], sats[i][1], sats[i][2], sats[i][3], sats[i][4], sats[i][5],\
+                    x_ecef, y_ecef, z_ecef, x_dot_ecef, y_dot_ecef, z_dot_ecef])
+            
+    i = 0
+    j = 0
+    a = (4 * np.pi) / grid_n
+    d = np.sqrt(a)
+    m = np.round(np.pi / d)
+    dt = np.pi / m
+    dp = a / dt
+    for i in range(int(m)):
+        t = np.pi * (i + 0.5) / m
+        mp = np.round(2 * np.pi * np.sin(t) / dp)
+        for j in range(int(mp)):
+            p = 2 * np.pi * j / mp
+            if j == 0 and i == 0:
+                sites = [[Re * np.sin(t) * np.cos(p), Re * np.sin(t) * np.sin(p), Re * np.cos(t)]]
+            else:
+                sites.append([Re * np.sin(t) * np.cos(p), Re * np.sin(t) * np.sin(p), Re * np.cos(t)]) 
+    i = 0
+    j = 0
+    grid_n = len(sites)
+
+    alldops = [[0.0]]
+
+    for j in range(grid_n):
+        z = sites[j][2]
+        a = Re
+        a_sq = a ** 2
+        e_sq = e_ecc ** 2
+        b = a * (1 - e_f)
+        # calculations:
+        r = np.sqrt(sites[j][0] ** 2 + sites[j][1] ** 2)
+        ep_sq = (a ** 2 - b ** 2) / b ** 2
+        ee = (a ** 2 - b ** 2)
+        f = (54 * b ** 2) * (z ** 2)
+        g = r ** 2 + (1 - e_sq) * (z ** 2) - e_sq * ee * 2
+        c = (e_sq ** 2) * f * r ** 2 / (g ** 3)
+        s = (1 + c + np.sqrt(c ** 2 + 2 * c)) ** (1 / 3.)
+        p = f / (3. * (g ** 2) * (s + (1. / s) + 1) ** 2)
+        q = np.sqrt(1 + 2 * p * e_sq ** 2)
+        r_0 = -(p * e_sq * r) / (1 + q) + np.sqrt(
+            0.5 * (a ** 2) * (1 + (1. / q)) - p * (z ** 2) * (1 - e_sq) / (q * (1 + q)) - 0.5 * p * (r ** 2))
+        u = np.sqrt((r - e_sq * r_0) ** 2 + z ** 2)
+        v = np.sqrt((r - e_sq * r_0) ** 2 + (1 - e_sq) * z ** 2)
+        z_0 = (b ** 2) * z / (a * v)
+        alt = u * (1 - b ** 2 / (a * v))
+        lat = np.arctan((z + ep_sq * z_0) / r)
+        lon = np.arctan2(sites[j][1], sites[j][0])
+        ecef2enu = np.array([[-np.sin(lon),np.cos(lon),0]\
+                            ,[-np.sin(lat)*np.cos(lon), -np.sin(lat)*np.sin(lon), np.cos(lat)]\
+                                ,[np.cos(lat)*np.cos(lon),  np.cos(lat)*np.sin(lon), np.sin(lat)]])
+ 
+        los = [[0.0]]
+        no_sv = 0
+
+        for i in range(n_p*n_s):
+            
+            diff_x = ecef[i][6] - sites[j][0]
+            diff_y = ecef[i][7] - sites[j][1]
+            diff_z = ecef[i][8] - sites[j][2]
+            t = np.cos(lon) * diff_x + np.sin(lon) * diff_y
+            e = -np.sin(lon) * diff_x + np.cos(lon) * diff_y
+            u = np.cos(lat) * t + np.sin(lat) * diff_z
+            n = -np.sin(lat) * t + np.cos(lat) * diff_z
+            if abs(e) < 1e-3:
+                e = 0.0  # type: ignore
+            if abs(n) < 1e-3:
+                n = 0.0  # type: ignore
+            if abs(u) < 1e-3:
+                u = 0.0  # type: ignore 
+            enu = np.sqrt(e ** 2 + n ** 2 + u ** 2)
+            slantRange = np.sqrt(diff_x ** 2 + diff_y ** 2 + diff_z ** 2)
+            elev = np.arcsin(u / enu)
+            az = np.arctan2(e / enu, n / enu)
+            if elev * 180 / np.pi >= elmask:
+                if no_sv == 0:
+                    los = [[diff_x/slantRange, diff_y/slantRange, diff_z/slantRange]]
+                else:
+                    los.append([diff_x/slantRange, diff_y/slantRange, diff_z/slantRange])
+                no_sv += 1
+            else:
+                pass
+        
+        if no_sv >= 4:
+            for i in range(no_sv):
+                if i == 0:
+                    g_mat = [[los[i][0],los[i][1],los[i][2],1]]
+                else:
+                    g_mat.append([los[i][0],los[i][1],los[i][2],1])
+            
+            
+            i = 0
+            ii = 0
+            iii = 0
+            gt_gmat = [[0.0]]
+            for iii in range(4):
+                mid_roww = [0.0]
+                for ii in range(4):
+                    mid_el = 0.0
+                    for i in range(no_sv):
+                        mid_el += g_mat[i][iii] * g_mat[i][ii]
+                    if ii == 0:
+                        mid_roww = [mid_el]
+                    else:
+                        mid_roww.append(mid_el)
+                if iii == 0:
+                    gt_gmat = [mid_roww]
+                else:
+                    gt_gmat.append(mid_roww)
+            r_tilde = [[ecef2enu[0,0], ecef2enu[0,1], ecef2enu[0,2], 0], \
+                       [ecef2enu[1,0], ecef2enu[1,1], ecef2enu[1,2], 0], \
+                       [ecef2enu[2,0], ecef2enu[2,1], ecef2enu[2,2], 0], \
+                       [0,0,0,1]]
+            
+            
+            
+            
+
+            i = 0
+            ii = 0
+            iii = 0
+            rt_gg = [[0.0]]
+            for iii in range(4):
+                rt_gg_row = [0.0]
+                for ii in range(4):
+                    rt_gg_el = 0.0
+                    for i in range(4):
+                        rt_gg_el += r_tilde[iii][i] * gt_gmat[i][ii]
+                    if ii == 0:
+                        rt_gg_row = [rt_gg_el]
+                    else:
+                        rt_gg_row.append(rt_gg_el)
+                if iii == 0:
+                    rt_gg = [rt_gg_row]
+                else:
+                    rt_gg.append(rt_gg_row)
+            
+            i = 0
+            ii = 0
+            iii = 0
+            rt_gg_rt = [[0.0]]
+            for iii in range(4):
+                rt_gg_rt_row = [0.0]
+                for ii in range(4):
+                    rt_gg_rt_el = 0.0
+                    for i in range(4):
+                        rt_gg_rt_el += rt_gg[iii][i] * r_tilde[ii][i]
+                    if ii == 0:
+                        rt_gg_rt_row = [rt_gg_rt_el]
+                    else:
+                        rt_gg_rt_row.append(rt_gg_rt_el)
+                if iii == 0:
+                    rt_gg_rt = [rt_gg_rt_row]
+                else:
+                    rt_gg_rt.append(rt_gg_rt_row)
+            
+            aamat = np.array([[rt_gg_rt[0][0], rt_gg_rt[0][1], rt_gg_rt[0][2], rt_gg_rt[0][3]],\
+                              [rt_gg_rt[1][0], rt_gg_rt[1][1], rt_gg_rt[1][2], rt_gg_rt[1][3]],\
+                              [rt_gg_rt[2][0], rt_gg_rt[2][1], rt_gg_rt[2][2], rt_gg_rt[2][3]],\
+                              [rt_gg_rt[3][0], rt_gg_rt[3][1], rt_gg_rt[3][2], rt_gg_rt[3][3]]], dtype=np.float64)
+            
+            h_mat = np.linalg.pinv(aamat)
+
+            dops = [h_mat[0,0], h_mat[1,1], h_mat[2,2], h_mat[3,3]]
+
+        else:
+            dops = [25e8,25e8,25e8,25e8]
+        gdop = (dops[0] + dops[1] + dops[2] + dops[3]) ** 0.5
+        pdop = (dops[0] + dops[1] + dops[2]) ** 0.5
+        tdop = (dops[3]) ** 0.5
+        hdop = (dops[0] + dops[1]) ** 0.5
+        vdop = (dops[2]) ** 0.5
+        if j == 0:
+            alldops = [[gdop, pdop, tdop, hdop, vdop]]
+        else:
+            alldops.append([gdop, pdop, tdop, hdop, vdop])
+    return alldops
